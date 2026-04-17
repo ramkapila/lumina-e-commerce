@@ -1,0 +1,151 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - uid: string (required) - Firebase Auth UID
+//   - email: string (required) - User email
+//   - displayName: string (optional) - User's full name
+//   - role: string (required, enum: ['customer', 'admin']) - User role
+//   - createdAt: timestamp (required) - Account creation timestamp
+//
+// Collection: products
+// Document ID: {productId}
+// Fields:
+//   - name: string (required)
+//   - description: string (required)
+//   - price: number (required)
+//   - category: string (required)
+//   - image: string (required)
+//   - stock: number (required)
+//   - rating: number (optional)
+//
+// Collection: orders
+// Document ID: {orderId}
+// Fields:
+//   - userId: string (required)
+//   - items: list (required) - List of {productId, name, price, quantity}
+//   - totalAmount: number (required)
+//   - status: string (required, enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'])
+//   - createdAt: timestamp (required)
+//
+// Collection: reviews
+// Document ID: {reviewId}
+// Fields:
+//   - productId: string (required)
+//   - userId: string (required)
+//   - userName: string (required)
+//   - rating: number (required, 1-5)
+//   - comment: string (required)
+//   - createdAt: timestamp (required)
+//
+// Collection: carts
+// Document ID: {userId}
+// Fields:
+//   - userId: string (required)
+//   - items: list (required) - List of {productId, quantity}
+//   - updatedAt: timestamp (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "ramcharankapila@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['customer', 'admin'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'description', 'price', 'category', 'image', 'stock']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.description is string && data.description.size() < 2000 &&
+             data.price is number && data.price >= 0 &&
+             data.category is string &&
+             data.image is string &&
+             data.stock is number && data.stock >= 0;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['userId', 'items', 'totalAmount', 'status', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.items is list &&
+             data.totalAmount is number && data.totalAmount >= 0 &&
+             data.status in ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['productId', 'userId', 'userName', 'rating', 'comment', 'createdAt']) &&
+             data.productId is string &&
+             data.userId == request.auth.uid &&
+             data.userName is string &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() < 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidCart(data) {
+      return data.keys().hasAll(['userId', 'items', 'updatedAt']) &&
+             data.userId == request.auth.uid &&
+             data.items is list &&
+             data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'customer' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidProduct(request.resource.data);
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidOrder(request.resource.data);
+      allow update: if isAdmin() && isValidOrder(request.resource.data);
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidReview(request.resource.data);
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidReview(request.resource.data);
+    }
+
+    match /carts/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isValidCart(request.resource.data);
+    }
+  }
+}
